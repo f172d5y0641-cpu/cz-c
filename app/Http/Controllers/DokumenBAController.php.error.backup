@@ -1,0 +1,225 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\DokumenBA;
+use App\Models\Bapb;
+use App\Models\Bapp;
+use App\Models\Approval;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+class DokumenBAController extends Controller
+{/**
+ * Display a listing of Dokumen BA.
+ * Untuk admin: semua dokumen (tanpa parameter)
+ * Untuk vendor: dokumen berdasarkan jenis (BAPB/BAPP) dengan parameter
+ */
+public function index($jenis = null)
+{
+    // Jika dipanggil dari admin (tanpa parameter)
+    if ($jenis === null) {
+        $dokumenBa = DokumenBA::with(['vendor', 'picGudang'])
+            ->orderBy('created_at', 'desc')
+            ->paginate(15);
+            
+        return view('admin.dokumen-ba.index', compact('dokumenBa'));
+    }
+    
+    // Jika dipanggil dari vendor (dengan parameter)
+    $dokumen = DokumenBA::where('jenis_dokumen', strtoupper($jenis))
+        ->where('vendor_id', auth()->id())
+        ->orderBy('created_at', 'desc')
+        ->get();
+    
+    return view('vendor.' . strtolower($jenis) . '.index', compact('dokumen'));
+}public function adminIndex()
+{
+    $dokumenBa = DokumenBA::with(['vendor', 'picGudang'])
+        ->orderBy('created_at', 'desc')
+        ->paginate(15);
+        
+    return view('admin.dokumen-ba.index', compact('dokumenBa'));
+}
+    public function create($jenis)
+    {
+        return view('vendor.' . strtolower($jenis) . '.create', compact('jenis'));
+    }
+
+    public function store(Request $request)
+    {
+        $user = Auth::user();
+        $request->validate([
+            'nama_vendor' => 'required|string|max:255',
+            'jabatan' => 'required|string|max:255',
+            'perusahaan' => 'required|string|max:255',
+            'alamat' => 'required|string',
+            'nomor_kontrak' => 'required|string|max:255',
+            'jenis_dokumen' => 'required|in:BAPB,BAPP',
+            'deskripsi_pekerjaan' => 'required|string',
+            'nilai_pekerjaan' => 'required|numeric',
+        ]);
+
+        $dokumen = DokumenBA::create([
+            'id_users' => $user->id,
+            'nama_vendor' => $request->nama_vendor,
+            'jabatan' => $request->jabatan,
+            'perusahaan' => $request->perusahaan,
+            'alamat' => $request->alamat,
+            'nomor_kontrak' => $request->nomor_kontrak,
+            'jenis_dokumen' => $request->jenis_dokumen,
+            'deskripsi_pekerjaan' => $request->deskripsi_pekerjaan,
+            'nilai_pekerjaan' => $request->nilai_pekerjaan,
+            'status' => 'pending',
+        ]);
+
+        if (strtolower($request->jenis_dokumen) == 'bapb') {
+            foreach ($request->barang as $barang) {
+                Bapb::create([
+                    'id_ba' => $dokumen->id_ba,
+                    'nama_barang' => $barang['nama'],
+                    'merk_type' => $barang['merk'],
+                    'kondisi' => $barang['kondisi'],
+                    'jumlah' => $barang['jumlah'],
+                    'keterangan' => $barang['keterangan']
+                ]);
+            }
+        }
+
+        if (strtolower($request->jenis_dokumen) == 'bapp') {
+            foreach ($request->pekerjaan as $pekerjaan) {
+                Bapp::create([
+                    'id_ba' => $dokumen->id_ba,
+                    'uraian_pekerjaan' => $pekerjaan['uraian'],
+                    'spesifikasi_volume' => $pekerjaan['spesifikasi'],
+                    'status_pekerjaan' => $pekerjaan['status'],
+                    'keterangan' => $pekerjaan['keterangan'],
+                ]);
+            }
+        }
+        return redirect()->route('vendor.dashboard')->with('success', 'Dokumen berhasil dibuat.');
+    }
+
+    public function edit(DokumenBA $dokumen)
+    {
+        return view('vendor.' . strtolower($dokumen->jenis_dokumen) . '.edit', compact('dokumen'));
+    }
+
+    public function update(Request $request, DokumenBA $dokumen)
+    {
+        $request->validate([
+            'nama_vendor' => 'required|string|max:255',
+            'jabatan' => 'required|string|max:255',
+            'perusahaan' => 'required|string|max:255',
+            'alamat' => 'required|string',
+            'nomor_kontrak' => 'required|string|max:255',
+            'deskripsi_pekerjaan' => 'required|string',
+            'nilai_pekerjaan' => 'required|numeric',
+        ]);
+
+        $dokumen->update([
+            'nama_vendor' => $request->nama_vendor,
+            'jabatan' => $request->jabatan,
+            'perusahaan' => $request->perusahaan,
+            'alamat' => $request->alamat,
+            'nomor_kontrak' => $request->nomor_kontrak,
+            'deskripsi_pekerjaan' => $request->deskripsi_pekerjaan,
+            'nilai_pekerjaan' => $request->nilai_pekerjaan,
+        ]);
+
+        if ($dokumen->jenis_dokumen == 'BAPP') {
+            Bapp::where('id_ba', $dokumen->id_ba)
+                ->delete();
+            foreach ($request->pekerjaan as $pekerjaan) {
+                Bapp::create([
+                    'id_ba' => $dokumen->id_ba,
+                    'uraian_pekerjaan' => $pekerjaan['uraian'],
+                    'spesifikasi_volume' => $pekerjaan['spesifikasi'],
+                    'status_pekerjaan' => $pekerjaan['status'],
+                    'keterangan' => $pekerjaan['keterangan'],
+                ]);
+            }
+        } else {
+            Bapb::where('id_ba', $dokumen->id_ba)
+                ->delete();
+            foreach ($request->barang as $barang) {
+                Bapb::create([
+                    'id_ba' => $dokumen->id_ba,
+                    'nama_barang' => $barang['nama'],
+                    'merk_type' => $barang['merk'],
+                    'keterangan' => $barang['keterangan'],
+                    'jumlah' => $barang['jumlah'],
+                    'kondisi' => $barang['kondisi'],
+                ]);
+            }
+        }
+
+        return redirect()->route('vendor.dokumenba.index', $dokumen->jenis_dokumen)
+            ->with('success', 'Dokumen berhasil diperbarui.');
+    }
+
+    public function show($id)
+    {
+        $dokumen = DokumenBA::with(['bapb', 'bapp'])->findOrFail($id);
+
+        $renderPdfUrl = route('vendor.dokumen.pdf.preview', $dokumen->id_ba);
+        $latestApproval = Approval::where('id_ba', $dokumen->id_ba)
+            ->whereNotNull('file_dokumen')
+            ->latest()
+            ->first();
+
+        $storedPath = $latestApproval->file_dokumen ?? $dokumen->file_dokumen ?? "dokumen_ba/dokumen-{$dokumen->id_ba}.pdf";
+        $normalizedPath = ltrim(preg_replace('#^(storage|public)/#', '', $storedPath), '/');
+        $pdfUrl = route('vendor.dokumen.pdf.preview', $dokumen->id_ba);
+
+        if (Str::startsWith($storedPath, ['http://', 'https://'])) {
+            $pdfUrl = $storedPath;
+        } elseif (Storage::disk('public')->exists($normalizedPath)) {
+            $pdfUrl = Storage::disk('public')->url($normalizedPath);
+        }
+
+        $bladeView = '';
+
+        if ($dokumen->jenis_dokumen == 'BAPB') {
+            $bladeView = 'vendor.bapb.show';
+        } else {
+            $bladeView = 'vendor.bapp.show';
+        }
+
+        return view($bladeView, [
+            'dokumen' => $dokumen,
+            'pdfUrl' => $pdfUrl,
+            'pdfRenderUrl' => $renderPdfUrl,
+        ]);
+    }
+
+
+    public function destroy(DokumenBA $dokumen)
+    {
+        $dokumen->delete();
+        return back()->with('success', 'Dokumen berhasil dihapus.');
+    }
+
+    public function kirim(DokumenBA $dokumen)
+    {
+        $user = Auth::user();
+        $update_approval = Approval::where('id_ba', $dokumen->id_ba)
+            ->where('id_users', $user->id)
+            ->where('status', 'signed')
+            ->first();
+
+        if (!$update_approval) {
+            return redirect()->back()->with('error', 'Dokumen tidak ditemukan');
+        }
+
+        $dokumen->status = 'submitted';
+        $dokumen->save();
+
+        $update_approval->status = 'submitted';
+        $update_approval->save();
+
+        return redirect()->back()->with('success', 'Dokumen dikirim! menunggu persetujuan');
+    }
+}
